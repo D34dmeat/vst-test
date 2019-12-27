@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate vst;
 
+use vst::plugin::PluginParameters;
+use std::sync::Arc;
+use vst::util::AtomicFloat;
 use vst::api::{Events, Supported};
 use vst::buffer::AudioBuffer;
 use vst::event::Event;
@@ -24,6 +27,21 @@ struct SineSynth {
     time: f64,
     note_duration: f64,
     note: Option<u8>,
+    params: Arc<GainEffectParameters>,
+}
+
+struct GainEffectParameters {
+    // The plugin's state consists of a single parameter: amplitude.
+    amplitude: AtomicFloat,
+    attack: AtomicFloat,
+}
+impl Default for GainEffectParameters {
+    fn default() -> GainEffectParameters {
+        GainEffectParameters {
+            amplitude: AtomicFloat::new(0.5),
+            attack: AtomicFloat::new(0.5),
+        }
+    }
 }
 
 impl SineSynth {
@@ -70,6 +88,7 @@ impl Default for SineSynth {
             note_duration: 0.0,
             time: 0.0,
             note: None,
+            params: Arc::new(GainEffectParameters::default()),
         }
     }
 }
@@ -77,13 +96,13 @@ impl Default for SineSynth {
 impl Plugin for SineSynth {
     fn get_info(&self) -> Info {
         Info {
-            name: "SineSynth".to_string(),
-            vendor: "DeathDisco".to_string(),
+            name: "SobudoSynth".to_string(),
+            vendor: "d34dmeat".to_string(),
             unique_id: 6667,
             category: Category::Synth,
             inputs: 2,
             outputs: 2,
-            parameters: 0,
+            parameters: 2,
             initial_delay: 0,
             ..Info::default()
         }
@@ -107,6 +126,7 @@ impl Plugin for SineSynth {
 
     fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
         let samples = buffer.samples();
+        let amplitude = self.params.amplitude.get();
         let (_, mut outputs) = buffer.split();
         let output_count = outputs.len();
         let per_sample = self.time_per_sample();
@@ -118,14 +138,15 @@ impl Plugin for SineSynth {
                 let signal = (time * midi_pitch_to_freq(current_note) * TAU).sin();
 
                 // Apply a quick envelope to the attack of the signal to avoid popping.
-                let attack = 0.5;
+                let attack = self.params.attack.get() as f64;
+                //let attack = 0.5;
                 let alpha = if note_duration < attack {
                     note_duration / attack
                 } else {
                     1.0
                 };
 
-                output_sample = (signal * alpha) as f32;
+                output_sample = ((signal * alpha)*amplitude as f64) as f32;
 
                 self.time += per_sample;
                 self.note_duration += per_sample;
@@ -144,6 +165,52 @@ impl Plugin for SineSynth {
             CanDo::ReceiveMidiEvent => Supported::Yes,
             _ => Supported::Maybe,
         }
+    }
+    // Return the parameter object. This method can be omitted if the
+    // plugin has no parameters.
+    fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
+        Arc::clone(&self.params) as Arc<dyn PluginParameters>
+    }
+}
+
+impl PluginParameters for GainEffectParameters {
+    // the `get_parameter` function reads the value of a parameter.
+    fn get_parameter(&self, index: i32) -> f32 {
+        match index {
+            0 => self.amplitude.get(),
+            1 => self.attack.get(),
+            _ => 0.0,
+        }
+    }
+
+    // the `set_parameter` function sets the value of a parameter.
+    fn set_parameter(&self, index: i32, val: f32) {
+        #[allow(clippy::single_match)]
+        match index {
+            0 => self.amplitude.set(val),
+            1 => self.attack.set(val),
+            _ => (),
+        }
+    }
+
+    // This is what will display underneath our control.  We can
+    // format it into a string that makes the most since.
+    fn get_parameter_text(&self, index: i32) -> String {
+        match index {
+            0 => format!("{:.2}", (self.amplitude.get() - 0.5) * 2f32),
+            1 => format!("{:.2}", (self.attack.get() - 0.5) * 2f32),
+            _ => "".to_string(),
+        }
+    }
+
+    // This shows the control's name.
+    fn get_parameter_name(&self, index: i32) -> String {
+        match index {
+            0 => "Amplitude",
+            1 => "Attack",
+            _ => "",
+        }
+        .to_string()
     }
 }
 
